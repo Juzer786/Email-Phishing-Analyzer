@@ -1,0 +1,341 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Phishing Email Analysis Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="/static/style.css" />
+    <link
+      rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css"
+    />
+  </head>
+
+  <body>
+    <div class="container">
+      <!-- Header -->
+      <div class="header">
+        <div class="logo">
+          <i class="fas fa-shield-alt"></i>
+        </div>
+
+        <div>
+          <h1>Phishing Email Analysis Dashboard</h1>
+          <p>Email Threat Detection & Risk Assessment</p>
+        </div>
+      </div>
+
+      <!-- Stats -->
+      <div class="stats-grid">
+        <div class="stat-card">
+          <i class="fas fa-envelope"></i>
+          <h3 id="emailCount">0</h3>
+          <p>Emails Analyzed</p>
+        </div>
+
+        <div class="stat-card">
+          <i class="fas fa-triangle-exclamation"></i>
+          <h3 id="threatCount">0</h3>
+          <p>Threats Detected</p>
+        </div>
+
+        <div class="stat-card">
+          <i class="fas fa-link"></i>
+          <h3 id="urlCount">0</h3>
+          <p>URLs Found</p>
+        </div>
+
+        <div class="stat-card">
+          <i class="fas fa-shield-virus"></i>
+          <h3 id="riskValue">0</h3>
+          <p>Risk Score</p>
+        </div>
+      </div>
+
+      <!-- Charts Dashboard -->
+      <div class="charts-container">
+        <div class="chart-card">
+          <h2>Risk Level Distribution</h2>
+          <canvas id="riskChart"></canvas>
+        </div>
+
+       
+      </div>
+
+      <!-- Input -->
+      <textarea
+        id="emailInput"
+        placeholder="Paste raw email content here..."
+      ></textarea>
+      <button onclick="analyzeEmail()">Analyze Text</button>
+
+      <hr />
+
+      <!-- Upload -->
+      <h3>Upload .eml File</h3>
+      <input type="file" id="fileInput" accept=".eml" />
+      <br /><br />
+      <button onclick="uploadFile()">Analyze File</button>
+
+      <!-- Report -->
+      <div id="report"></div>
+
+      <!-- History -->
+      <div class="history-section">
+        <h2>Analysis History</h2>
+
+        <button onclick="deleteHistory()" class="delete-btn">
+          Delete History
+        </button>
+
+        <table id="historyTable">
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Risk Level</th>
+              <th>Score</th>
+              <th>URLs</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <script>
+      let currentReport = null;
+      let riskChart = null;
+      //let dailyChart = null;
+
+      /* ---------------- TIME FORMAT (FIXED) ---------------- */
+      function formatTime(timestamp) {
+        if (!timestamp) return "-";
+
+        const date = new Date(timestamp);
+
+        return date.toLocaleString("en-IN", {
+          timeZone: "Asia/Kolkata",
+          day: "2-digit",
+          month: "short",
+          year: "numeric",
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+          hour12: true,
+        });
+      }
+
+      /* ---------------- LOAD HISTORY ---------------- */
+      async function loadHistory() {
+        try {
+          const res = await fetch("/history");
+          const data = await res.json();
+
+          const tbody = document.querySelector("#historyTable tbody");
+          tbody.innerHTML = "";
+
+          data.forEach((item) => {
+            const row = `
+              <tr>
+                <td>${formatTime(item.timestamp)}</td>
+                <td>${item.risk_level}</td>
+                <td>${item.risk_score}</td>
+                <td>${item.url_count}</td>
+                <td>
+                  <button onclick="deleteRecord(${item.id})">
+                    Delete
+                  </button>
+                </td>
+              </tr>
+            `;
+            tbody.insertAdjacentHTML("afterbegin", row);
+          });
+
+          // update stats from DB (accurate counts)
+          document.getElementById("emailCount").innerText = data.length;
+
+          const highThreats = data.filter(
+            (d) => d.risk_level === "High",
+          ).length;
+          document.getElementById("threatCount").innerText = highThreats;
+          updateCharts(data);
+        } catch (err) {
+          console.error("History load error:", err);
+        }
+      }
+
+      function updateCharts(data) {
+        const low = data.filter((x) => x.risk_level === "Low").length;
+        const medium = data.filter((x) => x.risk_level === "Medium").length;
+        const high = data.filter((x) => x.risk_level === "High").length;
+
+        
+
+        if (riskChart) riskChart.destroy();
+
+        riskChart = new Chart(document.getElementById("riskChart"), {
+          type: "pie",
+          data: {
+            labels: ["Low", "Medium", "High"],
+            datasets: [
+              {
+                data: [low, medium, high],
+                backgroundColor: ["#22c55e", "#f59e0b", "#ef4444"],
+              },
+            ],
+          },
+        });
+
+        
+      }
+
+      /* ---------------- DELETE HISTORY ---------------- */
+      async function deleteHistory() {
+        if (!confirm("Are you sure you want to hide all history?")) return;
+
+        const res = await fetch("/delete-history", {
+          method: "POST",
+        });
+
+        const data = await res.json();
+
+        alert(data.message);
+
+        // Reload history from server
+        loadHistory();
+      }
+
+      async function deleteRecord(id) {
+        if (!confirm("Delete this record?")) return;
+
+        const res = await fetch(`/delete-history/${id}`, {
+          method: "POST",
+        });
+
+        const data = await res.json();
+
+        alert(data.message);
+
+        loadHistory();
+      }
+
+      /* ---------------- ANALYZE TEXT ---------------- */
+      async function analyzeEmail() {
+        const email = document.getElementById("emailInput").value;
+
+        if (!email.trim()) {
+          alert("Please enter email content");
+          return;
+        }
+
+        document.getElementById("report").innerHTML =
+          `<div class="loading">Analyzing Email...</div>`;
+
+        const response = await fetch("/analyze", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email }),
+        });
+
+        const data = await response.json();
+        showReport(data.report);
+      }
+
+      /* ---------------- UPLOAD FILE ---------------- */
+      async function uploadFile() {
+        const file = document.getElementById("fileInput").files[0];
+
+        if (!file) {
+          alert("Please select an .eml file");
+          return;
+        }
+
+        document.getElementById("report").innerHTML =
+          `<div class="loading">Analyzing Email...</div>`;
+
+        const formData = new FormData();
+        formData.append("file", file);
+
+        const response = await fetch("/upload", {
+          method: "POST",
+          body: formData,
+        });
+
+        const data = await response.json();
+
+        if (data.error) {
+          alert(data.error);
+          return;
+        }
+
+        showReport(data.report);
+      }
+
+      /* ---------------- SHOW REPORT ---------------- */
+      function showReport(r) {
+        currentReport = r;
+
+        let color = "#22c55e";
+        if (r.risk_level === "Medium") color = "#f59e0b";
+        if (r.risk_level === "High") color = "#ef4444";
+
+        document.getElementById("urlCount").innerText = r.urls_found.length;
+        document.getElementById("riskValue").innerText = r.risk_score;
+
+        if (r.risk_level === "High") {
+          document.getElementById("threatCount").innerText =
+            Number(document.getElementById("threatCount").innerText) + 1;
+        }
+
+        // reload history from DB (source of truth)
+        loadHistory();
+
+        document.getElementById("report").innerHTML = `
+          <div class="card">
+            <h2 style="color:${color}">Risk Level: ${r.risk_level}</h2>
+            <h3>Risk Score: ${r.risk_score}/100</h3>
+
+            <div class="meter">
+              <div class="risk-fill" style="width:${r.risk_score}%; background:${color};"></div>
+            </div>
+
+            <h3>URLs Found</h3>
+            <ul>
+              ${
+                r.urls_found.length
+                  ? r.urls_found.map((url) => `<li>${url}</li>`).join("")
+                  : "<li>No URLs found</li>"
+              }
+            </ul>
+
+            <button onclick="downloadPDF()">Download PDF Report</button>
+          </div>
+        `;
+      }
+
+      /* ---------------- PDF ---------------- */
+      async function downloadPDF() {
+        if (!currentReport) return alert("Analyze first");
+
+        const res = await fetch("/download-report", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ report: currentReport }),
+        });
+
+        const blob = await res.blob();
+        const url = window.URL.createObjectURL(blob);
+
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "Phishing_Report.pdf";
+        a.click();
+      }
+
+      /* ---------------- INIT ---------------- */
+      document.addEventListener("DOMContentLoaded", loadHistory);
+    </script>
+  </body>
+</html>
