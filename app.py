@@ -1,19 +1,22 @@
 from flask import Flask, render_template, request, jsonify, send_file
 from analyzer import analyze_email
-from database import init_db, save_analysis, get_history, delete_all_history
-from pdf_generator import generate_pdf
-from email import message_from_string, policy
-from datetime import datetime, timezone
-import sqlite3
 from database import (
     init_db,
     save_analysis,
     get_history,
     delete_all_history,
     get_risk_stats,
-    get_daily_stats
+    get_daily_stats,
+    delete_history_item
 )
+from pdf_generator import generate_pdf
+from email import message_from_string, policy
+from datetime import datetime, timezone
+import sqlite3
 
+# -----------------------------
+# APP INIT
+# -----------------------------
 app = Flask(__name__)
 init_db()
 
@@ -24,6 +27,10 @@ init_db()
 def home():
     return render_template("index.html")
 
+
+# -----------------------------
+# CHART DATA
+# -----------------------------
 @app.route("/risk-chart")
 def risk_chart():
     return jsonify(get_risk_stats())
@@ -32,6 +39,8 @@ def risk_chart():
 @app.route("/daily-chart")
 def daily_chart():
     return jsonify(get_daily_stats())
+
+
 # -----------------------------
 # TEXT ANALYSIS
 # -----------------------------
@@ -57,15 +66,12 @@ def analyze():
 
 
 # -----------------------------
-# DELETE HISTORY (SOFT DELETE)
+# DELETE ALL HISTORY
 # -----------------------------
 @app.route("/delete-history", methods=["POST"])
 def delete_history():
     delete_all_history()
-
-    return jsonify({
-        "message": "History hidden successfully"
-    })
+    return jsonify({"message": "History hidden successfully"})
 
 
 # -----------------------------
@@ -73,7 +79,6 @@ def delete_history():
 # -----------------------------
 @app.route("/upload", methods=["POST"])
 def upload():
-
     if "file" not in request.files:
         return jsonify({"error": "No file uploaded"}), 400
 
@@ -110,7 +115,6 @@ def history():
     rows = get_history()
 
     data = []
-
     for row in rows:
         data.append({
             "id": row[0],
@@ -126,24 +130,16 @@ def history():
 
 
 # -----------------------------
-# ALL DATABASE RECORDS
+# ALL HISTORY (ADMIN VIEW)
 # -----------------------------
 @app.route("/all-history")
 def all_history():
-
     conn = sqlite3.connect("phishing_analyzer.db")
     cursor = conn.cursor()
 
     cursor.execute("""
-        SELECT
-            id,
-            timestamp,
-            risk_score,
-            risk_level,
-            sender,
-            subject,
-            url_count,
-            is_hidden
+        SELECT id, timestamp, risk_score, risk_level,
+               sender, subject, url_count, is_hidden
         FROM analyses
         ORDER BY id DESC
     """)
@@ -152,7 +148,6 @@ def all_history():
     conn.close()
 
     data = []
-
     for row in rows:
         data.append({
             "id": row[0],
@@ -167,15 +162,15 @@ def all_history():
 
     return jsonify(data)
 
+
+# -----------------------------
+# DELETE SINGLE RECORD
+# -----------------------------
 @app.route("/delete-history/<int:record_id>", methods=["POST"])
 def delete_history_item_route(record_id):
-    from database import delete_history_item
-
     delete_history_item(record_id)
+    return jsonify({"message": "Record hidden successfully"})
 
-    return jsonify({
-        "message": "Record hidden successfully"
-    })
 
 # -----------------------------
 # PDF DOWNLOAD
@@ -194,5 +189,12 @@ def download_report():
     )
 
 
+# -----------------------------
+# RUN (FOR RENDER)
+# -----------------------------
 if __name__ == "__main__":
-    app.run(debug=True)
+    import os
+
+    port = int(os.environ.get("PORT", 5000))
+
+    app.run(host="0.0.0.0", port=port)
